@@ -26,7 +26,7 @@ const registerUser = asyncHandler( async(req,res)=>{
     //step-1
     /*if data is coming from body, json etc we use -> */ 
     const {fullname, username, email, password} = req.body
-    console.log("email: ", email);
+    console.log(email);
     
 
     //step-2
@@ -43,7 +43,7 @@ const registerUser = asyncHandler( async(req,res)=>{
     }
 
     // step - 3 
-    const existedUser = User.findOne({
+    const existedUser = await User.findOne({
         // $ or is a operator which says check by either this or that
         $or : [{ username }, { email }]
     })
