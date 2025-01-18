@@ -302,19 +302,41 @@ const updateAccountDetails = asyncHandler(async(req,res)=>{
 })
 
 const updateUserAvatar = asyncHandler(async(req,res)=>{
-    // Here we require only one file
+    // Extract the path of the new avatar file
     const avatarLocalPath = req.file?.path;
 
     if(!avatarLocalPath){
         throw new ApiError(400,"Avatar file is missing")
     }
 
+    // To update the new image we need to remove the old image
+    // Fetching the current user's data to get the old avatar's URL
+
+    const user = await User.findById(req.user?._id);
+    if(!user){
+        throw new ApiError(404,"User not found")
+    }
+
+    // Extract the public ID of the old avatar (if it exists) from its URL
+    const oldAvatarUrl = user.avatar;
+    const oldAvatarPublicId = oldAvatarUrl
+        ? oldAvatarUrl.split("/").slice(-1)[0].split(".")[0] // Extract public ID from URL
+        : null;
+
+
+    // Upload the new avatar to Cloudinary
     const avatar = await uploadOnCloudinary(avatarLocalPath);
 
     if(!avatar.url){
         throw new ApiError(400, "Error while uploading avatar")
     }
 
+    // Remove the old avatar from Cloudinary if it exists
+    if (oldAvatarPublicId) {
+        await cloudinary.uploader.destroy(oldAvatarPublicId);
+    }
+
+    // Update the user's avatar URL in the database
     const userAvatar = await User.findByIdAndUpdate(
         req.user?._id,
         {
@@ -327,6 +349,7 @@ const updateUserAvatar = asyncHandler(async(req,res)=>{
         }
     ).select("-password")
 
+    // Respond with the updated user data
     return res
     .status(200)
     .json(new ApiResponse(200, userAvatar, "Avatar updated successfully"))
@@ -362,6 +385,85 @@ const updateUserCoverImage = asyncHandler(async(req,res)=>{
     return res
     .status(200)
     .json(new ApiResponse(200, userCoverImage, "CoverImage updated successfully"))
+})
+
+// Function to fetch a user's channel profile based on their username
+const getUserChannelProfile = asyncHandler(async(req,res)=>{
+    const {username} = req.params;
+
+    // Validate the username parameter
+    if(!username?.trim()){
+        throw new ApiError(404, "User not found");
+    }
+
+    // MongoDB aggregation pipeline to fetch the user's channel data
+    const channel = await User.aggregate([
+        {
+            // Match the username from the request, ensuring case-insensitivity
+            $match: {
+                username: username?.toLowerCase()
+            }
+        },
+        {   
+            // Performs joins with the subscriptions collection to fetch subscriber and subscription data.
+            // Lookup subscribers for the channel from the "subscriptions" collection
+            $lookup: {
+                //each & every thing is a field so we must use $sign when
+                //accessing some value from them
+                from: "subscriptions", // Target collection to join
+                localField: "_id",  // User's `_id` in the current document
+                foreignField: "channel",    // Matches `channel` field in the "subscriptions" collection
+                as: "subscribers"   // The output array field containing matching documents
+            }
+        },
+        {
+            // Lookup the channels this user has subscribed to
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+        },
+        {
+            // Add computed fields to the resulting documents
+            $addFields: {
+                subscribersCount: {
+                    $size: "$subscribers" // Use '$ size' to count elements in the `subscribers` array
+                },
+                channelsSubscribedCount: {
+                    $size: "$subscribedTo"  // Use `$ size` to count elements in the `subscribedTo` array
+                },
+                // Check if the logged-in user (req.user) is subscribed to this channel
+                isSubscribed: {
+                    $cond: {
+                        if: {$in: [req.user?._id, "$subscribers.subscriber"]},
+                        then: true,
+                        else: false
+                    }
+                }
+            }
+        },
+        {
+            // the below function projects what to show on screen
+            $project: {
+                fullname: 1,
+                username: 1,
+                email: 1,
+                subscribersCount: 1,
+                channelsSubscribedCount: 1,
+                isSubscribed: 1,
+                avatar: 1,
+                coverImage: 1
+            }
+        }
+    ]);
+
+    if(!channel?.length){
+        throw new ApiError(404, "Channel does not exist")
+    }
+
+    return res.status(200).json(new ApiResponse(200,channel[0] ,"Channel info showed successfully"))
 })
 
 export {
